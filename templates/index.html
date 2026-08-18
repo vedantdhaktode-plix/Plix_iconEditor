@@ -69,8 +69,15 @@
             gap: 18px;
         }
 
+        .workspace-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
         .search-bar {
-            width: 100%;
+            flex: 1;
+            min-width: 0;
             padding: 14px 20px;
             border: 1px solid var(--border);
             border-radius: 12px;
@@ -83,6 +90,31 @@
         .search-bar:focus {
             border-color: var(--accent);
             box-shadow: 0 0 0 3px rgba(0, 112, 74, 0.12);
+        }
+
+        .manage-button,
+        .secondary-button,
+        .danger-button,
+        .close-button {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface);
+            color: #334155;
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        .manage-button {
+            flex: 0 0 auto;
+            padding: 13px 17px;
+            color: var(--accent);
+            border-color: rgba(0, 112, 74, 0.3);
+        }
+
+        .manage-button:hover,
+        .secondary-button:hover {
+            background: #f0fdf4;
+            border-color: var(--accent);
         }
 
         .layout-body {
@@ -317,6 +349,259 @@
             cursor: not-allowed;
         }
 
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: rgba(15, 23, 42, 0.55);
+        }
+
+        .modal-backdrop[hidden],
+        [hidden] {
+            display: none !important;
+        }
+
+        .manage-modal {
+            width: min(920px, 100%);
+            max-height: min(820px, calc(100vh - 48px));
+            overflow: auto;
+            background: var(--surface);
+            border-radius: 18px;
+            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+        }
+
+        .modal-header {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 22px 24px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-header h2 {
+            font-size: 1.2rem;
+        }
+
+        .modal-header p {
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .close-button {
+            width: 38px;
+            height: 38px;
+            font-size: 20px;
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .admin-gate {
+            max-width: 440px;
+            margin: 16px auto;
+            padding: 24px;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: var(--page);
+        }
+
+        .admin-gate h3,
+        .upload-panel h3,
+        .manage-list-heading h3 {
+            font-size: 15px;
+            margin-bottom: 6px;
+        }
+
+        .admin-gate p,
+        .form-help {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 16px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+
+        .field.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .field label {
+            color: #334155;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .text-input,
+        .file-input {
+            width: 100%;
+            padding: 11px 12px;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            background: var(--surface);
+            outline: none;
+        }
+
+        .text-input:focus,
+        .file-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(0, 112, 74, 0.1);
+        }
+
+        .primary-small,
+        .secondary-button,
+        .danger-button {
+            padding: 10px 14px;
+            font-size: 13px;
+        }
+
+        .primary-small {
+            border: 0;
+            border-radius: 9px;
+            background: var(--accent);
+            color: white;
+            cursor: pointer;
+            font-weight: 750;
+        }
+
+        .primary-small:hover:not(:disabled) {
+            background: var(--accent-dark);
+        }
+
+        .danger-button {
+            color: var(--danger);
+            border-color: rgba(180, 35, 24, 0.25);
+        }
+
+        .danger-button:hover:not(:disabled) {
+            background: #fff1f2;
+            border-color: var(--danger);
+        }
+
+        .primary-small:disabled,
+        .secondary-button:disabled,
+        .danger-button:disabled {
+            cursor: wait;
+            opacity: 0.55;
+        }
+
+        .admin-gate .primary-small {
+            width: 100%;
+            margin-top: 12px;
+        }
+
+        .manage-status {
+            min-height: 20px;
+            margin-top: 12px;
+            color: var(--accent);
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .manage-status.error {
+            color: var(--danger);
+        }
+
+        .upload-panel {
+            padding: 20px;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: var(--page);
+        }
+
+        .upload-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 14px;
+        }
+
+        .manage-list-heading {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 16px;
+            margin: 26px 0 12px;
+        }
+
+        .manage-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .manage-row {
+            display: grid;
+            grid-template-columns: 58px minmax(0, 1fr) minmax(0, 1.2fr) auto;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        .manage-row img {
+            width: 54px;
+            height: 54px;
+            object-fit: contain;
+            border-radius: 9px;
+            background: var(--page);
+        }
+
+        .manage-meta {
+            min-width: 0;
+        }
+
+        .manage-filename {
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 12px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 5px;
+        }
+
+        .badge {
+            padding: 3px 7px;
+            border-radius: 999px;
+            background: #ecfdf5;
+            color: var(--accent-dark);
+            font-size: 10px;
+            font-weight: 750;
+        }
+
+        .row-actions {
+            display: flex;
+            gap: 7px;
+        }
+
         .no-results,
         .gallery-error {
             grid-column: 1 / -1;
@@ -368,6 +653,40 @@
                 gap: 12px;
             }
 
+            .workspace-toolbar {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .manage-button {
+                width: 100%;
+            }
+
+            .modal-backdrop {
+                padding: 0;
+            }
+
+            .manage-modal {
+                width: 100%;
+                max-height: 100vh;
+                min-height: 100vh;
+                border-radius: 0;
+            }
+
+            .field-grid,
+            .manage-row {
+                grid-template-columns: 1fr;
+            }
+
+            .manage-row img {
+                width: 64px;
+                height: 64px;
+            }
+
+            .row-actions {
+                justify-content: flex-end;
+            }
+
             .canvas-container {
                 height: 260px;
             }
@@ -412,13 +731,18 @@
     </aside>
 
     <main class="main-workspace">
-        <input
-            type="search"
-            id="searchBox"
-            class="search-bar"
-            placeholder="Search by filename or tag, for example cream, hand, drop..."
-            autocomplete="off"
-        >
+        <div class="workspace-toolbar">
+            <input
+                type="search"
+                id="searchBox"
+                class="search-bar"
+                placeholder="Search by name, filename, tag or color, for example purple drop..."
+                autocomplete="off"
+            >
+            <button id="manageIconsBtn" class="manage-button" type="button">
+                Manage Icons
+            </button>
+        </div>
 
         <div class="layout-body">
             <div id="iconGrid" class="gallery-grid" aria-live="polite"></div>
@@ -438,6 +762,68 @@
         </div>
     </main>
 
+    <div id="manageModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="manageHeading" hidden>
+        <section class="manage-modal">
+            <header class="modal-header">
+                <div>
+                    <h2 id="manageHeading">Manage Icons</h2>
+                    <p>Upload PNGs and update the words teammates can search.</p>
+                </div>
+                <button id="closeManageBtn" class="close-button" type="button" aria-label="Close icon manager">&times;</button>
+            </header>
+
+            <div class="modal-body">
+                <section id="adminGate" class="admin-gate">
+                    <h3>Admin access</h3>
+                    <p>Enter the icon manager password. It is kept only in this browser tab.</p>
+                    <div class="field" style="margin-top: 16px;">
+                        <label for="adminPasswordInput">Admin password</label>
+                        <input id="adminPasswordInput" class="text-input" type="password" autocomplete="current-password">
+                    </div>
+                    <button id="unlockManagerBtn" class="primary-small" type="button">Open Icon Manager</button>
+                    <p id="adminGateStatus" class="manage-status" aria-live="polite"></p>
+                </section>
+
+                <div id="manageContent" hidden>
+                    <section class="upload-panel">
+                        <h3>Upload a new PNG</h3>
+                        <p class="form-help">PNG only, up to 5 MB. Colors are detected automatically and added to search.</p>
+                        <form id="uploadIconForm">
+                            <div class="field-grid">
+                                <div class="field">
+                                    <label for="uploadName">Icon name</label>
+                                    <input id="uploadName" name="name" class="text-input" type="text" maxlength="100" required>
+                                </div>
+                                <div class="field">
+                                    <label for="uploadFile">PNG file</label>
+                                    <input id="uploadFile" name="file" class="file-input" type="file" accept="image/png,.png" required>
+                                </div>
+                                <div class="field full-width">
+                                    <label for="uploadTags">Optional tags</label>
+                                    <input id="uploadTags" name="tags" class="text-input" type="text" placeholder="fruit, drop, skin care">
+                                </div>
+                            </div>
+                            <div class="upload-actions">
+                                <button id="uploadIconBtn" class="primary-small" type="submit">Upload Icon</button>
+                                <span class="form-help">The source file is stored in Supabase, not on Render.</span>
+                            </div>
+                        </form>
+                    </section>
+
+                    <div class="manage-list-heading">
+                        <div>
+                            <h3>Current icons</h3>
+                            <p class="form-help">Saving a name or tags updates search immediately.</p>
+                        </div>
+                        <button id="refreshManagerBtn" class="secondary-button" type="button">Refresh</button>
+                    </div>
+                    <p id="manageStatus" class="manage-status" aria-live="polite"></p>
+                    <div id="manageList" class="manage-list"></div>
+                </div>
+            </div>
+        </section>
+    </div>
+
     <script>
         (() => {
             "use strict";
@@ -449,6 +835,9 @@
             let previewTimer = null;
             let previewInFlight = false;
             let previewQueued = false;
+            let gallerySequence = 0;
+            let searchTimer = null;
+            let adminPassword = "";
 
             const iconGrid = document.getElementById("iconGrid");
             const searchBox = document.getElementById("searchBox");
@@ -461,6 +850,19 @@
             const placeholderText = document.getElementById("placeholderText");
             const previewStatus = document.getElementById("previewStatus");
             const downloadBtn = document.getElementById("downloadBtn");
+            const manageIconsBtn = document.getElementById("manageIconsBtn");
+            const manageModal = document.getElementById("manageModal");
+            const closeManageBtn = document.getElementById("closeManageBtn");
+            const adminGate = document.getElementById("adminGate");
+            const adminPasswordInput = document.getElementById("adminPasswordInput");
+            const unlockManagerBtn = document.getElementById("unlockManagerBtn");
+            const adminGateStatus = document.getElementById("adminGateStatus");
+            const manageContent = document.getElementById("manageContent");
+            const uploadIconForm = document.getElementById("uploadIconForm");
+            const uploadIconBtn = document.getElementById("uploadIconBtn");
+            const refreshManagerBtn = document.getElementById("refreshManagerBtn");
+            const manageStatus = document.getElementById("manageStatus");
+            const manageList = document.getElementById("manageList");
 
             function currentSettings() {
                 return {
@@ -587,6 +989,40 @@
                 return new Error(detail);
             }
 
+            function adminHeaders(asJson = false) {
+                const headers = {
+                    Accept: "application/json",
+                    "X-Admin-Password": adminPassword,
+                };
+                if (asJson) {
+                    headers["Content-Type"] = "application/json";
+                }
+                return headers;
+            }
+
+            async function responseJson(response) {
+                let payload = null;
+                try {
+                    payload = await response.json();
+                } catch (error) {
+                    console.debug("Could not parse JSON response", error);
+                }
+                if (!response.ok) {
+                    throw new Error(
+                        payload && payload.error
+                            ? payload.error
+                            : `Request failed with status ${response.status}`
+                    );
+                }
+                return payload;
+            }
+
+            function setManagerStatus(message, isError = false, gate = false) {
+                const target = gate ? adminGateStatus : manageStatus;
+                target.textContent = message;
+                target.classList.toggle("error", isError);
+            }
+
             async function renderLivePreview() {
                 updateSizeLabel();
 
@@ -693,18 +1129,10 @@
                 renderLivePreview();
             }
 
-            function renderGallery(filter = "") {
-                const query = filter.trim().toLowerCase();
-                const filteredIcons = iconsDataCache.filter((icon) => {
-                    return (
-                        icon.src.toLowerCase().includes(query) ||
-                        icon.tags.some((tag) => tag.toLowerCase().includes(query))
-                    );
-                });
-
+            function renderGallery() {
                 iconGrid.replaceChildren();
 
-                if (filteredIcons.length === 0) {
+                if (iconsDataCache.length === 0) {
                     const emptyMessage = document.createElement("div");
                     emptyMessage.className = "no-results";
                     emptyMessage.textContent = "No matching icons were found.";
@@ -712,14 +1140,14 @@
                     return;
                 }
 
-                filteredIcons.forEach((icon) => {
+                iconsDataCache.forEach((icon) => {
                     const card = document.createElement("button");
                     card.type = "button";
                     card.className = "icon-card";
                     card.setAttribute("aria-pressed", "false");
                     card.setAttribute(
                         "aria-label",
-                        `Select ${formatIconName(icon.src)}`
+                        `Select ${icon.name || formatIconName(icon.src)}`
                     );
 
                     if (selectedIcon && selectedIcon.id === icon.id) {
@@ -730,14 +1158,14 @@
                     const thumbnail = document.createElement("img");
                     thumbnail.alt = "";
                     thumbnail.loading = "lazy";
-                    thumbnail.src = `/icons/${encodeURIComponent(icon.src)}`;
+                    thumbnail.src = icon.thumbnail_url;
                     thumbnail.addEventListener("error", () => {
                         thumbnail.style.visibility = "hidden";
                     });
                     card.appendChild(thumbnail);
 
                     const name = document.createElement("p");
-                    name.textContent = formatIconName(icon.src);
+                    name.textContent = icon.name || formatIconName(icon.src);
                     card.appendChild(name);
 
                     if (!icon.available) {
@@ -754,12 +1182,20 @@
                 });
             }
 
-            async function fetchGallery() {
+            async function fetchGallery(query = searchBox.value) {
+                const sequence = ++gallerySequence;
                 iconGrid.innerHTML = '<div class="no-results">Loading icon catalog...</div>';
+                const parameters = new URLSearchParams();
+                if (query.trim()) {
+                    parameters.set("q", query.trim());
+                }
+                const endpoint = parameters.size
+                    ? `/api/search?${parameters.toString()}`
+                    : "/api/search";
 
                 try {
                     const response = await fetchWithRetry(
-                        "/api/search",
+                        endpoint,
                         {
                             headers: { Accept: "application/json" },
                             cache: "no-store",
@@ -775,10 +1211,26 @@
                     if (!Array.isArray(payload)) {
                         throw new Error("The server returned an invalid catalog response");
                     }
+                    if (sequence !== gallerySequence) {
+                        return;
+                    }
 
                     iconsDataCache = payload;
-                    renderGallery(searchBox.value);
+                    if (
+                        selectedIcon &&
+                        !iconsDataCache.some((icon) => icon.id === selectedIcon.id)
+                    ) {
+                        selectedIcon = null;
+                        liveCanvas.hidden = true;
+                        placeholderText.hidden = false;
+                        placeholderText.textContent = "Select an illustration asset to preview it.";
+                        downloadBtn.disabled = true;
+                    }
+                    renderGallery();
                 } catch (error) {
+                    if (sequence !== gallerySequence) {
+                        return;
+                    }
                     console.error(error);
                     iconGrid.innerHTML = "";
                     const errorMessage = document.createElement("div");
@@ -786,6 +1238,265 @@
                     errorMessage.textContent =
                         "Could not load the icon catalog. The hosted service may be waking up; wait a moment and refresh.";
                     iconGrid.appendChild(errorMessage);
+                }
+            }
+
+            function openManager() {
+                manageModal.hidden = false;
+                document.body.style.overflow = "hidden";
+                window.setTimeout(() => adminPasswordInput.focus(), 0);
+            }
+
+            function closeManager() {
+                manageModal.hidden = true;
+                document.body.style.overflow = "";
+                adminPassword = "";
+                adminPasswordInput.value = "";
+                adminGate.hidden = false;
+                manageContent.hidden = true;
+                manageList.replaceChildren();
+                setManagerStatus("", false, true);
+                setManagerStatus("");
+            }
+
+            async function authenticateManager() {
+                const candidate = adminPasswordInput.value;
+                if (!candidate) {
+                    setManagerStatus("Enter the admin password.", true, true);
+                    return;
+                }
+
+                adminPassword = candidate;
+                unlockManagerBtn.disabled = true;
+                setManagerStatus("Checking password...", false, true);
+                try {
+                    const response = await fetch("/api/admin/check", {
+                        method: "POST",
+                        headers: adminHeaders(),
+                        cache: "no-store",
+                    });
+                    await responseJson(response);
+                    adminGate.hidden = true;
+                    manageContent.hidden = false;
+                    setManagerStatus("", false, true);
+                    await loadManagerIcons();
+                } catch (error) {
+                    adminPassword = "";
+                    setManagerStatus(error.message, true, true);
+                    adminPasswordInput.select();
+                } finally {
+                    unlockManagerBtn.disabled = false;
+                }
+            }
+
+            function colorBadge(text) {
+                const badge = document.createElement("span");
+                badge.className = "badge";
+                badge.textContent = text;
+                return badge;
+            }
+
+            function renderManagerIcons(icons) {
+                manageList.replaceChildren();
+                if (icons.length === 0) {
+                    const empty = document.createElement("p");
+                    empty.className = "form-help";
+                    empty.textContent = "No active icons are available.";
+                    manageList.appendChild(empty);
+                    return;
+                }
+
+                icons.forEach((icon) => {
+                    const row = document.createElement("article");
+                    row.className = "manage-row";
+
+                    const image = document.createElement("img");
+                    image.src = icon.thumbnail_url;
+                    image.alt = "";
+                    image.loading = "lazy";
+
+                    const meta = document.createElement("div");
+                    meta.className = "manage-meta";
+                    const nameInput = document.createElement("input");
+                    nameInput.className = "text-input";
+                    nameInput.type = "text";
+                    nameInput.maxLength = 100;
+                    nameInput.value = icon.name;
+                    nameInput.setAttribute("aria-label", `Name for ${icon.filename}`);
+                    const filename = document.createElement("p");
+                    filename.className = "manage-filename";
+                    filename.textContent = icon.filename;
+                    const badges = document.createElement("div");
+                    badges.className = "badge-row";
+                    badges.appendChild(colorBadge(icon.source));
+                    icon.colors.forEach((color) => badges.appendChild(colorBadge(color)));
+                    meta.append(nameInput, filename, badges);
+
+                    const tagInput = document.createElement("input");
+                    tagInput.className = "text-input";
+                    tagInput.type = "text";
+                    tagInput.value = icon.tags.join(", ");
+                    tagInput.placeholder = "Tags separated by commas";
+                    tagInput.setAttribute("aria-label", `Tags for ${icon.name}`);
+
+                    const actions = document.createElement("div");
+                    actions.className = "row-actions";
+                    const saveButton = document.createElement("button");
+                    saveButton.type = "button";
+                    saveButton.className = "secondary-button";
+                    saveButton.textContent = "Save";
+                    const removeButton = document.createElement("button");
+                    removeButton.type = "button";
+                    removeButton.className = "danger-button";
+                    removeButton.textContent = "Remove";
+                    actions.append(saveButton, removeButton);
+
+                    saveButton.addEventListener("click", async () => {
+                        saveButton.disabled = true;
+                        removeButton.disabled = true;
+                        setManagerStatus(`Saving ${icon.name}...`);
+                        try {
+                            const response = await fetch(
+                                `/api/admin/icons/${encodeURIComponent(icon.id)}`,
+                                {
+                                    method: "PATCH",
+                                    headers: adminHeaders(true),
+                                    body: JSON.stringify({
+                                        name: nameInput.value,
+                                        tags: tagInput.value
+                                            .split(",")
+                                            .map((tag) => tag.trim())
+                                            .filter(Boolean),
+                                    }),
+                                    cache: "no-store",
+                                }
+                            );
+                            const updated = await responseJson(response);
+                            setManagerStatus(`${updated.name} was updated.`);
+                            await Promise.all([
+                                fetchGallery(searchBox.value),
+                                loadManagerIcons(`${updated.name} was updated.`),
+                            ]);
+                        } catch (error) {
+                            setManagerStatus(error.message, true);
+                            saveButton.disabled = false;
+                            removeButton.disabled = false;
+                        }
+                    });
+
+                    removeButton.addEventListener("click", async () => {
+                        const consequence = icon.source === "storage"
+                            ? "Its Supabase Storage file will also be deleted."
+                            : "The repository PNG will stay in GitHub and the catalog entry will be deactivated.";
+                        if (!window.confirm(`Remove ${icon.name}? ${consequence}`)) {
+                            return;
+                        }
+
+                        saveButton.disabled = true;
+                        removeButton.disabled = true;
+                        setManagerStatus(`Removing ${icon.name}...`);
+                        try {
+                            const response = await fetch(
+                                `/api/admin/icons/${encodeURIComponent(icon.id)}`,
+                                {
+                                    method: "DELETE",
+                                    headers: adminHeaders(),
+                                    cache: "no-store",
+                                }
+                            );
+                            await responseJson(response);
+                            if (selectedIcon && selectedIcon.id === icon.id) {
+                                selectedIcon = null;
+                                liveCanvas.hidden = true;
+                                placeholderText.hidden = false;
+                                placeholderText.textContent = "Select an illustration asset to preview it.";
+                                downloadBtn.disabled = true;
+                            }
+                            await Promise.all([
+                                fetchGallery(searchBox.value),
+                                loadManagerIcons(`${icon.name} was removed.`),
+                            ]);
+                        } catch (error) {
+                            setManagerStatus(error.message, true);
+                            saveButton.disabled = false;
+                            removeButton.disabled = false;
+                        }
+                    });
+
+                    row.append(image, meta, tagInput, actions);
+                    manageList.appendChild(row);
+                });
+            }
+
+            async function loadManagerIcons(successMessage = "") {
+                refreshManagerBtn.disabled = true;
+                manageList.replaceChildren();
+                const loading = document.createElement("p");
+                loading.className = "form-help";
+                loading.textContent = "Loading icons...";
+                manageList.appendChild(loading);
+                if (!successMessage) {
+                    setManagerStatus("");
+                }
+                try {
+                    const response = await fetch("/api/admin/icons", {
+                        headers: adminHeaders(),
+                        cache: "no-store",
+                    });
+                    const icons = await responseJson(response);
+                    if (!Array.isArray(icons)) {
+                        throw new Error("The server returned an invalid icon list");
+                    }
+                    renderManagerIcons(icons);
+                    if (successMessage) {
+                        setManagerStatus(successMessage);
+                    }
+                } catch (error) {
+                    manageList.replaceChildren();
+                    setManagerStatus(error.message, true);
+                } finally {
+                    refreshManagerBtn.disabled = false;
+                }
+            }
+
+            async function submitIconUpload(event) {
+                event.preventDefault();
+                const file = document.getElementById("uploadFile").files[0];
+                if (!file) {
+                    setManagerStatus("Choose a PNG file.", true);
+                    return;
+                }
+                if (!file.name.toLowerCase().endsWith(".png")) {
+                    setManagerStatus("Choose a file with a .png extension.", true);
+                    return;
+                }
+                if (file.size > 5 * 1024 * 1024) {
+                    setManagerStatus("PNG files must be 5 MB or smaller.", true);
+                    return;
+                }
+
+                uploadIconBtn.disabled = true;
+                setManagerStatus("Validating and uploading PNG...");
+                try {
+                    const response = await fetch("/api/admin/icons", {
+                        method: "POST",
+                        headers: adminHeaders(),
+                        body: new FormData(uploadIconForm),
+                        cache: "no-store",
+                    });
+                    const icon = await responseJson(response);
+                    uploadIconForm.reset();
+                    const colors = icon.colors.length
+                        ? ` Detected colors: ${icon.colors.join(", ")}.`
+                        : "";
+                    await Promise.all([
+                        fetchGallery(searchBox.value),
+                        loadManagerIcons(`${icon.name} was uploaded.${colors}`),
+                    ]);
+                } catch (error) {
+                    setManagerStatus(error.message, true);
+                } finally {
+                    uploadIconBtn.disabled = false;
                 }
             }
 
@@ -804,8 +1515,12 @@
                 anchor.remove();
             }
 
-            searchBox.addEventListener("input", (event) => {
-                renderGallery(event.target.value);
+            searchBox.addEventListener("input", () => {
+                window.clearTimeout(searchTimer);
+                searchTimer = window.setTimeout(
+                    () => fetchGallery(searchBox.value),
+                    180
+                );
             });
 
             sizeSlider.addEventListener("input", schedulePreview);
@@ -817,6 +1532,26 @@
             });
 
             downloadBtn.addEventListener("click", downloadCurrentIcon);
+            manageIconsBtn.addEventListener("click", openManager);
+            closeManageBtn.addEventListener("click", closeManager);
+            unlockManagerBtn.addEventListener("click", authenticateManager);
+            adminPasswordInput.addEventListener("keydown", (event) => {
+                if (event.key === "Enter") {
+                    authenticateManager();
+                }
+            });
+            refreshManagerBtn.addEventListener("click", () => loadManagerIcons());
+            uploadIconForm.addEventListener("submit", submitIconUpload);
+            manageModal.addEventListener("click", (event) => {
+                if (event.target === manageModal) {
+                    closeManager();
+                }
+            });
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && !manageModal.hidden) {
+                    closeManager();
+                }
+            });
 
             updateSizeLabel();
             updateControlState();

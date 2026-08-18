@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import gc
+import colorsys
+import hmac
 import io
 import math
 import os
 import re
 import threading
+import uuid
+from collections import Counter
 from collections import defaultdict, deque
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import BinaryIO, Iterable, Sequence
 
 from flask import (
     Flask,
@@ -21,6 +25,12 @@ from flask import (
     send_from_directory,
 )
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, UnidentifiedImageError
+
+from supabase_catalog import (
+    SupabaseCatalog,
+    SupabaseCatalogError,
+    SupabaseSettings,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -38,8 +48,14 @@ TEMPLATE_DIR = (
 
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["MAX_CONTENT_LENGTH"] = 6 * 1024 * 1024
 
 MAX_OUTPUT_SIZE = 1024
+MAX_ICON_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_ICON_NAME_LENGTH = 100
+MAX_MANUAL_TAGS = 25
+MAX_TAG_LENGTH = 40
+Image.MAX_IMAGE_PIXELS = 25_000_000
 # Keep CPU and memory bounded on small hosting instances. The UI exports at
 # up to 400 px, so a 384 px working mask keeps edges clean without analysing
 # every pixel of a potentially very large source file.
@@ -49,66 +65,378 @@ PROCESSING_LOCK = threading.Lock()
 HEX_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 RESAMPLING_LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
-# Catalog entries must match the filenames inside the icons folder.
-ICONS_DB = [
-    {
-        "id": "1",
-        "src": "cream.png",
+# Legacy IDs and tags are retained only for local-development fallback and old
+# bookmarked process URLs. With Supabase configured, public.icons is the catalog
+# source of truth, including inactive records.
+LOCAL_ICON_METADATA = {
+    "cream.png": {
+        "legacy_id": "1",
+        "name": "Cream",
         "tags": ["cream", "finger", "hand", "lotion", "moisturizer"],
     },
-    {
-        "id": "2",
-        "src": "lotion.png",
+    "lotion.png": {
+        "legacy_id": "2",
+        "name": "Lotion",
         "tags": ["c", "drop", "pink", "white", "serum", "lotion"],
     },
-    {
-        "id": "3",
-        "src": "guava.png",
+    "guava.png": {
+        "legacy_id": "3",
+        "name": "Guava",
         "tags": ["apple", "fruit", "red", "guava"],
     },
-    {
-        "id": "4",
-        "src": "c_drop.png",
+    "c_drop.png": {
+        "legacy_id": "4",
+        "name": "C Drop",
         "tags": ["c", "drop", "serum", "pink"],
     },
-    {
-        "id": "5",
-        "src": "coffee_seed.png",
+    "coffee_seed.png": {
+        "legacy_id": "5",
+        "name": "Coffee Seed",
         "tags": ["coffee", "seed", "bean", "brown"],
     },
-    {
-        "id": "6",
-        "src": "drop.png",
+    "drop.png": {
+        "legacy_id": "6",
+        "name": "Drop",
         "tags": ["drop", "water", "liquid", "blue"],
     },
-    {
-        "id": "7",
-        "src": "hands.png",
+    "hands.png": {
+        "legacy_id": "7",
+        "name": "Hands",
         "tags": ["hands", "care", "protection", "skin"],
     },
-    {
-        "id": "8",
-        "src": "pink_star.png",
+    "pink_star.png": {
+        "legacy_id": "8",
+        "name": "Pink Star",
         "tags": ["pink", "star", "badge", "sparkle"],
     },
-    {
-        "id": "9",
-        "src": "purple_drop.png",
+    "purple_drop.png": {
+        "legacy_id": "9",
+        "name": "Purple Drop",
         "tags": ["purple", "drop", "liquid", "oil"],
     },
-    {
-        "id": "10",
-        "src": "sponge_bar.png",
+    "sponge_bar.png": {
+        "legacy_id": "10",
+        "name": "Sponge Bar",
         "tags": ["sponge", "bar", "clean", "wash"],
     },
-    {
-        "id": "11",
-        "src": "star_bar.png",
+    "star_bar.png": {
+        "legacy_id": "11",
+        "name": "Star Bar",
         "tags": ["star", "bar", "rating", "yellow"],
     },
-]
+}
+COLOR_FAMILIES = (
+    "red",
+    "orange",
+    "yellow",
+    "green",
+    "cyan",
+    "blue",
+    "purple",
+    "pink",
+    "brown",
+    "black",
+    "white",
+    "gray",
+)
 
-ALLOWED_ICON_NAMES = {icon["src"] for icon in ICONS_DB}
+
+def normalize_icon_name(value: object) -> str:
+    """Validate and normalize a teammate-facing icon name."""
+    name = " ".join(str(value or "").split())
+    if not name:
+        raise ValueError("Icon name is required")
+    if len(name) > MAX_ICON_NAME_LENGTH:
+        raise ValueError(
+            f"Icon name must be {MAX_ICON_NAME_LENGTH} characters or fewer"
+        )
+    return name
+
+
+def normalize_manual_tags(value: object) -> list[str]:
+    """Accept comma/newline strings or JSON arrays and return clean tags."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        candidates = re.split(r"[,\n]", value)
+    elif isinstance(value, list):
+        candidates = value
+    else:
+        raise ValueError("Tags must be a comma-separated string or a list")
+
+    tags: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        tag = " ".join(str(candidate).strip().lower().split())
+        if not tag:
+            continue
+        if len(tag) > MAX_TAG_LENGTH:
+            raise ValueError(
+                f"Each tag must be {MAX_TAG_LENGTH} characters or fewer"
+            )
+        if tag not in seen:
+            seen.add(tag)
+            tags.append(tag)
+        if len(tags) > MAX_MANUAL_TAGS:
+            raise ValueError(f"Use no more than {MAX_MANUAL_TAGS} tags")
+    return tags
+
+
+def color_family(red: int, green: int, blue: int) -> str:
+    """Map an RGB color to one of the supported searchable color families."""
+    hue, saturation, value = colorsys.rgb_to_hsv(
+        red / 255.0, green / 255.0, blue / 255.0
+    )
+    hue_degrees = hue * 360.0
+
+    if value <= 0.15:
+        return "black"
+    if saturation <= 0.12 and value >= 0.88:
+        return "white"
+    if saturation <= 0.16:
+        return "gray"
+    if 15 <= hue_degrees < 50 and value <= 0.68:
+        return "brown"
+    if hue_degrees < 15 or hue_degrees >= 345:
+        return "red"
+    if hue_degrees < 45:
+        return "orange"
+    if hue_degrees < 70:
+        return "yellow"
+    if hue_degrees < 165:
+        return "green"
+    if hue_degrees < 200:
+        return "cyan"
+    if hue_degrees < 255:
+        return "blue"
+    if hue_degrees < 295:
+        return "purple"
+    return "pink"
+
+
+def detect_dominant_color_families(image: Image.Image) -> list[str]:
+    """Detect up to four significant color families from an icon."""
+    sample = image.convert("RGBA")
+    sample.thumbnail((160, 160), RESAMPLING_LANCZOS)
+    counts: Counter[str] = Counter()
+    total_weight = 0
+
+    for red, green, blue, alpha in sample.getdata():
+        if alpha < 32:
+            continue
+        weight = max(1, alpha // 32)
+        counts[color_family(red, green, blue)] += weight
+        total_weight += weight
+
+    if not counts or total_weight == 0:
+        return []
+
+    minimum_weight = max(1, round(total_weight * 0.025))
+    detected = [
+        family
+        for family, weight in counts.most_common()
+        if weight >= minimum_weight
+    ]
+    return detected[:4] or [counts.most_common(1)[0][0]]
+
+
+@lru_cache(maxsize=32)
+def local_icon_colors(path_text: str, modified_ns: int) -> tuple[str, ...]:
+    del modified_ns
+    with Image.open(path_text) as image:
+        return tuple(detect_dominant_color_families(image))
+
+
+def validate_png_upload(upload: object) -> tuple[bytes, str, int, int, list[str]]:
+    """Read and validate an uploaded PNG without writing it to local storage."""
+    raw_filename = str(getattr(upload, "filename", "") or "")
+    filename = re.split(r"[\\/]", raw_filename)[-1].strip()
+    if not filename or Path(filename).suffix.lower() != ".png":
+        raise ValueError("Choose a PNG file with a .png extension")
+
+    stream = getattr(upload, "stream", None)
+    if stream is None:
+        raise ValueError("The uploaded PNG could not be read")
+    png_bytes = stream.read(MAX_ICON_UPLOAD_BYTES + 1)
+    if not png_bytes:
+        raise ValueError("The uploaded PNG is empty")
+    if len(png_bytes) > MAX_ICON_UPLOAD_BYTES:
+        raise ValueError("PNG files must be 5 MB or smaller")
+
+    try:
+        with Image.open(io.BytesIO(png_bytes)) as candidate:
+            if candidate.format != "PNG":
+                raise ValueError("The uploaded file is not a PNG")
+            width, height = candidate.size
+            if width * height > int(Image.MAX_IMAGE_PIXELS or 0):
+                raise ValueError("The PNG dimensions are too large to process safely")
+            candidate.verify()
+        with Image.open(io.BytesIO(png_bytes)) as candidate:
+            candidate.load()
+            colors = detect_dominant_color_families(candidate)
+    except ValueError:
+        raise
+    except (Image.DecompressionBombError, OSError, SyntaxError, UnidentifiedImageError) as error:
+        raise ValueError("The PNG is corrupt or unsafe to process") from error
+
+    if width <= 0 or height <= 0:
+        raise ValueError("The PNG has invalid dimensions")
+    return png_bytes, filename, width, height, colors
+
+
+def generated_icon_name(filename: str) -> str:
+    return Path(filename).stem.replace("_", " ").replace("-", " ").title()
+
+
+def local_fallback_icons() -> list[dict[str, object]]:
+    """Scan bundled PNGs when Supabase is absent or temporarily unavailable."""
+    records: list[dict[str, object]] = []
+    for image_path in sorted(ICONS_DIR.glob("*.png")):
+        metadata = LOCAL_ICON_METADATA.get(image_path.name, {})
+        modified_ns = image_path.stat().st_mtime_ns
+        records.append(
+            {
+                "id": str(metadata.get("legacy_id") or f"local:{image_path.name}"),
+                "name": str(metadata.get("name") or generated_icon_name(image_path.name)),
+                "source": "local",
+                "local_filename": image_path.name,
+                "storage_path": None,
+                "original_filename": image_path.name,
+                "tags": list(metadata.get("tags") or []),
+                "colors": list(local_icon_colors(str(image_path), modified_ns)),
+                "width": None,
+                "height": None,
+                "is_active": True,
+                "updated_at": f"local:{modified_ns}",
+            }
+        )
+    records.sort(key=lambda record: str(record["name"]).casefold())
+    return records
+
+
+def get_catalog_service() -> SupabaseCatalog:
+    factory = app.config.get("SUPABASE_CATALOG_FACTORY")
+    if callable(factory):
+        return factory()
+    return SupabaseCatalog(SupabaseSettings.from_environment())
+
+
+def load_active_catalog() -> tuple[list[dict[str, object]], str]:
+    service = get_catalog_service()
+    if service.configured:
+        try:
+            return service.list_icons(active_only=True), "supabase"
+        except SupabaseCatalogError:
+            app.logger.warning(
+                "Supabase catalog unavailable; serving bundled local icons",
+                exc_info=True,
+            )
+            return local_fallback_icons(), "local-fallback"
+    return local_fallback_icons(), "local"
+
+
+def resolve_icon_record(icon_id: str) -> dict[str, object] | None:
+    service = get_catalog_service()
+    if service.configured:
+        try:
+            return service.get_icon(icon_id, active_only=True)
+        except SupabaseCatalogError:
+            local_record = next(
+                (
+                    record
+                    for record in local_fallback_icons()
+                    if record["id"] == icon_id
+                ),
+                None,
+            )
+            if local_record is not None:
+                app.logger.warning(
+                    "Supabase lookup unavailable; processing bundled local icon",
+                    exc_info=True,
+                )
+                return local_record
+            raise
+    return next(
+        (record for record in local_fallback_icons() if record["id"] == icon_id),
+        None,
+    )
+
+
+def icon_filename(icon: dict[str, object]) -> str:
+    return str(
+        icon.get("original_filename")
+        or icon.get("local_filename")
+        or Path(str(icon.get("storage_path") or "icon.png")).name
+    )
+
+
+def searchable_icon_tags(icon: dict[str, object]) -> list[str]:
+    candidates: list[object] = [
+        icon_filename(icon),
+        Path(icon_filename(icon)).stem.replace("_", " ").replace("-", " "),
+        icon.get("name") or "",
+        *(icon.get("tags") or []),
+        *(icon.get("colors") or []),
+    ]
+    terms: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        term = " ".join(str(candidate).strip().lower().split())
+        if term and term not in seen:
+            seen.add(term)
+            terms.append(term)
+    return terms
+
+
+def public_icon_record(icon: dict[str, object]) -> dict[str, object]:
+    icon_id = str(icon["id"])
+    source = str(icon.get("source") or "local")
+    filename = icon_filename(icon)
+    local_path = ICONS_DIR / str(icon.get("local_filename") or "")
+    available = bool(icon.get("storage_path")) if source == "storage" else local_path.is_file()
+    return {
+        "id": icon_id,
+        "name": str(icon.get("name") or generated_icon_name(filename)),
+        "src": filename,
+        "filename": filename,
+        "tags": list(icon.get("tags") or []),
+        "colors": list(icon.get("colors") or []),
+        "search_tags": searchable_icon_tags(icon),
+        "source": source,
+        "available": available,
+        "thumbnail_url": f"/api/icons/{icon_id}",
+    }
+
+
+def icon_matches_query(icon: dict[str, object], query: str) -> bool:
+    tokens = re.findall(r"[a-z0-9]+", query.casefold())
+    if not tokens:
+        return True
+    haystack = " ".join(searchable_icon_tags(icon))
+    return all(token in haystack for token in tokens)
+
+
+def require_admin(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        configured_password = os.environ.get("ADMIN_PASSWORD", "")
+        if not configured_password:
+            return jsonify({"error": "Icon management is not configured"}), 503
+        supplied_password = request.headers.get("X-Admin-Password", "")
+        if not hmac.compare_digest(supplied_password, configured_password):
+            response = jsonify({"error": "Incorrect admin password"})
+            response.status_code = 401
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return function(*args, **kwargs)
+
+    return wrapped
+
+
+def configured_catalog_for_admin() -> SupabaseCatalog:
+    service = get_catalog_service()
+    service.require_configured()
+    return service
 
 
 def normalize_hex_color(value: str | None) -> tuple[int, int, int] | None:
@@ -392,7 +720,7 @@ def add_color_behind_transparent_artwork(
 
 
 def process_icon_image(
-    image_path: Path,
+    image_source: Path | BinaryIO,
     width: int | None = None,
     height: int | None = None,
     remove_background: bool = False,
@@ -405,7 +733,7 @@ def process_icon_image(
     is not converted to RGBA before resizing, which keeps peak memory low for
     large PNG files on small hosting instances.
     """
-    with Image.open(image_path) as source:
+    with Image.open(image_source) as source:
         source_width, source_height = source.size
         output_width = width or source_width
         output_height = height or source_height
@@ -605,7 +933,7 @@ def cached_processed_bytes(
     del image_mtime_ns  # Included in the key so changed files invalidate cache.
     with PROCESSING_LOCK:
         stream = process_icon_image(
-            image_path=Path(image_path_text),
+            image_source=Path(image_path_text),
             width=width or None,
             height=height or None,
             remove_background=remove_background,
@@ -615,15 +943,6 @@ def cached_processed_bytes(
         stream.close()
         gc.collect()
         return data
-
-
-def icon_record(icon: dict[str, object]) -> dict[str, object]:
-    """Return catalog data plus whether the corresponding file is present."""
-    filename = str(icon["src"])
-    return {
-        **icon,
-        "available": (ICONS_DIR / filename).is_file(),
-    }
 
 
 @app.get("/")
@@ -636,51 +955,224 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.errorhandler(413)
+def upload_too_large(_error):
+    return jsonify({"error": "PNG files must be 5 MB or smaller"}), 413
+
+
 @app.get("/api/search")
 def search_icons():
-    query = request.args.get("tag", "").strip().lower()
-    icons = ICONS_DB
-
+    query = (
+        request.args.get("q") or request.args.get("tag") or ""
+    ).strip()
+    icons, catalog_source = load_active_catalog()
     if query:
-        icons = [
-            icon
-            for icon in ICONS_DB
-            if query in str(icon["src"]).lower()
-            or any(query in str(tag).lower() for tag in icon["tags"])
-        ]
+        icons = [icon for icon in icons if icon_matches_query(icon, query)]
 
-    response = jsonify([icon_record(icon) for icon in icons])
+    response = jsonify([public_icon_record(icon) for icon in icons])
     response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Icon-Catalog"] = catalog_source
     return response
 
 
 @app.get("/icons/<path:filename>")
 def raw_icon(filename: str):
-    """Serve catalog images from the project-level icons folder."""
-    if filename not in ALLOWED_ICON_NAMES:
+    """Preserve the original local-icon URL used by existing clients."""
+    if (
+        re.split(r"[\\/]", filename)[-1] != filename
+        or Path(filename).suffix.lower() != ".png"
+        or not (ICONS_DIR / filename).is_file()
+    ):
         abort(404)
     return send_from_directory(str(ICONS_DIR), filename, max_age=0)
 
 
-@app.get("/api/process/<icon_id>")
-def process_icon(icon_id: str):
-    icon = next((item for item in ICONS_DB if item["id"] == icon_id), None)
+@app.get("/api/icons/<icon_id>")
+def source_icon(icon_id: str):
+    try:
+        icon = resolve_icon_record(icon_id)
+    except SupabaseCatalogError as error:
+        app.logger.warning("Could not resolve icon source: %s", error)
+        return jsonify({"error": str(error)}), 502
     if icon is None:
         return jsonify({"error": "Unknown icon id"}), 404
 
-    image_path = ICONS_DIR / str(icon["src"])
-    if not image_path.is_file():
-        return (
-            jsonify(
-                {
-                    "error": (
-                        f"{icon['src']} was not found. Put it inside "
-                        f"{ICONS_DIR}"
-                    )
-                }
-            ),
-            404,
+    if icon.get("source") == "storage":
+        storage_path = str(icon.get("storage_path") or "")
+        if not storage_path:
+            return jsonify({"error": "Icon storage path is missing"}), 404
+        try:
+            png_bytes = get_catalog_service().download_png(storage_path)
+        except SupabaseCatalogError as error:
+            app.logger.warning("Could not download icon source: %s", error)
+            return jsonify({"error": str(error)}), 502
+        response = send_file(
+            io.BytesIO(png_bytes),
+            mimetype="image/png",
+            download_name=icon_filename(icon),
+            max_age=0,
         )
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        return response
+
+    filename = str(icon.get("local_filename") or "")
+    if (
+        not filename
+        or re.split(r"[\\/]", filename)[-1] != filename
+        or not (ICONS_DIR / filename).is_file()
+    ):
+        return jsonify({"error": "Local icon file was not found"}), 404
+    return send_from_directory(str(ICONS_DIR), filename, max_age=0)
+
+
+@app.post("/api/admin/check")
+@require_admin
+def check_admin_password():
+    response = jsonify({"status": "ok"})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/admin/icons")
+@require_admin
+def admin_icons():
+    try:
+        icons = configured_catalog_for_admin().list_icons(active_only=True)
+    except SupabaseCatalogError as error:
+        app.logger.warning("Admin catalog request failed: %s", error)
+        return jsonify({"error": str(error)}), 502
+    response = jsonify([public_icon_record(icon) for icon in icons])
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/api/admin/icons")
+@require_admin
+def upload_icon():
+    try:
+        name = normalize_icon_name(request.form.get("name"))
+        tags = normalize_manual_tags(request.form.get("tags", ""))
+        upload = request.files.get("file")
+        if upload is None:
+            raise ValueError("Choose a PNG file to upload")
+        png_bytes, filename, width, height, colors = validate_png_upload(upload)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+    slug = re.sub(r"[^a-z0-9]+", "-", Path(filename).stem.casefold()).strip("-")
+    storage_path = f"uploads/{uuid.uuid4().hex}-{slug or 'icon'}.png"
+    try:
+        service = configured_catalog_for_admin()
+        service.upload_png(storage_path, png_bytes)
+        try:
+            icon = service.insert_icon(
+                {
+                    "name": name,
+                    "source": "storage",
+                    "local_filename": None,
+                    "storage_path": storage_path,
+                    "original_filename": filename,
+                    "tags": tags,
+                    "colors": colors,
+                    "width": width,
+                    "height": height,
+                    "is_active": True,
+                }
+            )
+        except SupabaseCatalogError:
+            try:
+                service.remove_png(storage_path)
+            except SupabaseCatalogError:
+                app.logger.exception(
+                    "Could not clean up Storage after metadata insert failed"
+                )
+            raise
+    except SupabaseCatalogError as error:
+        app.logger.warning("Icon upload failed: %s", error)
+        return jsonify({"error": str(error)}), 502
+
+    response = jsonify(public_icon_record(icon))
+    response.status_code = 201
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.patch("/api/admin/icons/<icon_id>")
+@require_admin
+def edit_icon(icon_id: str):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Send icon metadata as JSON"}), 400
+
+    updates: dict[str, object] = {}
+    try:
+        if "name" in payload:
+            updates["name"] = normalize_icon_name(payload["name"])
+        if "tags" in payload:
+            updates["tags"] = normalize_manual_tags(payload["tags"])
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    if not updates:
+        return jsonify({"error": "Provide a name or tags to update"}), 400
+
+    try:
+        icon = configured_catalog_for_admin().update_icon(icon_id, updates)
+    except SupabaseCatalogError as error:
+        app.logger.warning("Icon metadata update failed: %s", error)
+        return jsonify({"error": str(error)}), 502
+    if icon is None:
+        return jsonify({"error": "Unknown icon id"}), 404
+
+    response = jsonify(public_icon_record(icon))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.delete("/api/admin/icons/<icon_id>")
+@require_admin
+def remove_icon(icon_id: str):
+    try:
+        service = configured_catalog_for_admin()
+        icon = service.get_icon(icon_id, active_only=True)
+        if icon is None:
+            return jsonify({"error": "Unknown icon id"}), 404
+
+        if icon.get("source") == "storage" and not icon.get("storage_path"):
+            return jsonify({"error": "Icon storage path is missing"}), 409
+
+        deactivated = service.update_icon(icon_id, {"is_active": False})
+        if deactivated is None:
+            return jsonify({"error": "Unknown icon id"}), 404
+
+        if icon.get("source") == "storage":
+            try:
+                service.remove_png(str(icon["storage_path"]))
+            except SupabaseCatalogError:
+                try:
+                    service.update_icon(icon_id, {"is_active": True})
+                except SupabaseCatalogError:
+                    app.logger.exception(
+                        "Could not reactivate icon after Storage removal failed"
+                    )
+                raise
+    except SupabaseCatalogError as error:
+        app.logger.warning("Icon removal failed: %s", error)
+        return jsonify({"error": str(error)}), 502
+
+    response = jsonify({"id": icon_id, "status": "removed"})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/process/<icon_id>")
+def process_icon(icon_id: str):
+    try:
+        icon = resolve_icon_record(icon_id)
+    except SupabaseCatalogError as error:
+        app.logger.warning("Could not resolve icon for processing: %s", error)
+        return jsonify({"error": str(error)}), 502
+    if icon is None:
+        return jsonify({"error": "Unknown icon id"}), 404
 
     requested_size = request.args.get("size", type=int)
     width = clamp_dimension(request.args.get("width", type=int) or requested_size)
@@ -699,15 +1191,43 @@ def process_icon(icon_id: str):
         background_color = None
 
     try:
-        image_bytes = cached_processed_bytes(
-            str(image_path),
-            image_path.stat().st_mtime_ns,
-            width or 0,
-            height or 0,
-            remove_background,
-            background_color,
-        )
+        if icon.get("source") == "storage":
+            storage_path = str(icon.get("storage_path") or "")
+            if not storage_path:
+                return jsonify({"error": "Icon storage path is missing"}), 404
+            source_bytes = get_catalog_service().download_png(storage_path)
+            if len(source_bytes) > MAX_ICON_UPLOAD_BYTES:
+                return jsonify({"error": "Stored PNG exceeds the 5 MB limit"}), 422
+            with PROCESSING_LOCK:
+                processed_stream = process_icon_image(
+                    image_source=io.BytesIO(source_bytes),
+                    width=width,
+                    height=height,
+                    remove_background=remove_background,
+                    background_color=background_color,
+                )
+                image_bytes = processed_stream.getvalue()
+                processed_stream.close()
+                gc.collect()
+        else:
+            filename = str(icon.get("local_filename") or "")
+            if re.split(r"[\\/]", filename)[-1] != filename:
+                return jsonify({"error": "Invalid local icon path"}), 404
+            image_path = ICONS_DIR / filename
+            if not image_path.is_file():
+                return jsonify({"error": f"{filename} was not found"}), 404
+            image_bytes = cached_processed_bytes(
+                str(image_path),
+                image_path.stat().st_mtime_ns,
+                width or 0,
+                height or 0,
+                remove_background,
+                background_color,
+            )
         image_stream = io.BytesIO(image_bytes)
+    except SupabaseCatalogError as error:
+        app.logger.warning("Stored icon download failed: %s", error)
+        return jsonify({"error": str(error)}), 502
     except (OSError, UnidentifiedImageError) as error:
         return jsonify({"error": f"Could not read image: {error}"}), 500
     except Exception as error:  # Keeps the image endpoint useful in production.
@@ -717,7 +1237,7 @@ def process_icon(icon_id: str):
     as_download = (
         request.args.get("download", "false").strip().lower() == "true"
     )
-    output_name = f"{Path(str(icon['src'])).stem}_custom.png"
+    output_name = f"{Path(icon_filename(icon)).stem}_custom.png"
 
     response = send_file(
         image_stream,
