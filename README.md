@@ -15,10 +15,15 @@ in browser code:
 - `ADMIN_PASSWORD` — the password teammates use to open **Manage Icons**
 
 The app expects `public.icons` to contain the catalog metadata used by the
-configured Supabase project. If Supabase is not configured or a catalog read
-temporarily fails, the public gallery gracefully falls back to scanning the
-repository's local PNG files. Administrative changes still require Supabase so
-that Render's ephemeral filesystem is never used for uploaded assets.
+configured Supabase project and `public.search_icons_catalog` to provide the
+paginated public search. Public gallery pages contain 48 icons by default, and
+Storage-backed thumbnails load directly from the public Supabase Storage URL.
+Preview, recoloring, background removal, resizing, and downloads still run
+through Flask and Pillow. If Supabase is not configured or a catalog search
+temporarily fails, the public gallery gracefully falls back to scanning and
+paginating the repository's local PNG files. Administrative changes still
+require Supabase so that Render's ephemeral filesystem is never used for
+uploaded assets.
 
 ## Local development
 
@@ -36,7 +41,8 @@ preview, background processing, resize, and PNG download remain available.
 python -m unittest discover -s tests -v
 ```
 
-The test suite uses an in-memory Supabase double. It covers local compatibility,
-upload validation, automatic color tagging, combination search, metadata edits,
-both removal modes, and processing a Storage-backed PNG without writing it to
-the local filesystem.
+The test suite uses an in-memory Supabase double. It covers public pagination,
+RPC search parameters, local fallback, direct public thumbnail URLs, upload
+validation, automatic color tagging, combination search, metadata edits, both
+removal modes, and processing a Storage-backed PNG without writing it to the
+local filesystem.

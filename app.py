@@ -14,6 +14,7 @@ from collections import defaultdict, deque
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import BinaryIO, Iterable, Sequence
+from urllib.parse import quote
 
 from flask import (
     Flask,
@@ -55,6 +56,9 @@ MAX_ICON_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_ICON_NAME_LENGTH = 100
 MAX_MANUAL_TAGS = 25
 MAX_TAG_LENGTH = 40
+DEFAULT_PUBLIC_PAGE_SIZE = 48
+MAX_PUBLIC_PAGE_SIZE = 100
+MAX_PUBLIC_OFFSET = 2_147_483_647
 Image.MAX_IMAGE_PIXELS = 25_000_000
 # Keep CPU and memory bounded on small hosting instances. The UI exports at
 # up to 400 px, so a 384 px working mask keeps edges clean without analysing
@@ -321,18 +325,31 @@ def get_catalog_service() -> SupabaseCatalog:
     return SupabaseCatalog(SupabaseSettings.from_environment())
 
 
-def load_active_catalog() -> tuple[list[dict[str, object]], str]:
+def load_public_catalog_page(
+    query: str, limit: int, offset: int
+) -> tuple[list[dict[str, object]], bool, str, SupabaseCatalog]:
+    """Load one public page, preferring database-side search and pagination."""
     service = get_catalog_service()
     if service.configured:
         try:
-            return service.list_icons(active_only=True), "supabase"
+            rows = service.search_icons(
+                query,
+                limit=limit + 1,
+                offset=offset,
+            )
+            return rows[:limit], len(rows) > limit, "supabase", service
         except SupabaseCatalogError:
             app.logger.warning(
-                "Supabase catalog unavailable; serving bundled local icons",
+                "Supabase search unavailable; serving bundled local icons",
                 exc_info=True,
             )
-            return local_fallback_icons(), "local-fallback"
-    return local_fallback_icons(), "local"
+
+    icons = local_fallback_icons()
+    if query:
+        icons = [icon for icon in icons if icon_matches_query(icon, query)]
+    page = icons[offset : offset + limit + 1]
+    source = "local-fallback" if service.configured else "local"
+    return page[:limit], len(page) > limit, source, service
 
 
 def resolve_icon_record(icon_id: str) -> dict[str, object] | None:
@@ -388,12 +405,24 @@ def searchable_icon_tags(icon: dict[str, object]) -> list[str]:
     return terms
 
 
-def public_icon_record(icon: dict[str, object]) -> dict[str, object]:
+def public_icon_record(
+    icon: dict[str, object], service: SupabaseCatalog | None = None
+) -> dict[str, object]:
     icon_id = str(icon["id"])
     source = str(icon.get("source") or "local")
     filename = icon_filename(icon)
     local_path = ICONS_DIR / str(icon.get("local_filename") or "")
     available = bool(icon.get("storage_path")) if source == "storage" else local_path.is_file()
+    if source == "storage" and icon.get("storage_path"):
+        catalog_service = service or get_catalog_service()
+        try:
+            thumbnail_url = catalog_service.public_object_url(
+                str(icon["storage_path"])
+            )
+        except SupabaseCatalogError:
+            thumbnail_url = f"/api/icons/{quote(icon_id, safe='')}"
+    else:
+        thumbnail_url = f"/icons/{quote(filename, safe='')}"
     return {
         "id": icon_id,
         "name": str(icon.get("name") or generated_icon_name(filename)),
@@ -404,7 +433,7 @@ def public_icon_record(icon: dict[str, object]) -> dict[str, object]:
         "search_tags": searchable_icon_tags(icon),
         "source": source,
         "available": available,
-        "thumbnail_url": f"/api/icons/{icon_id}",
+        "thumbnail_url": thumbnail_url,
     }
 
 
@@ -965,11 +994,36 @@ def search_icons():
     query = (
         request.args.get("q") or request.args.get("tag") or ""
     ).strip()
-    icons, catalog_source = load_active_catalog()
-    if query:
-        icons = [icon for icon in icons if icon_matches_query(icon, query)]
+    requested_limit = request.args.get("limit", type=int)
+    requested_offset = request.args.get("offset", type=int)
+    limit = max(
+        1,
+        min(
+            MAX_PUBLIC_PAGE_SIZE,
+            requested_limit
+            if requested_limit is not None
+            else DEFAULT_PUBLIC_PAGE_SIZE,
+        ),
+    )
+    offset = max(
+        0,
+        min(
+            MAX_PUBLIC_OFFSET,
+            requested_offset if requested_offset is not None else 0,
+        ),
+    )
+    icons, has_more, catalog_source, service = load_public_catalog_page(
+        query, limit, offset
+    )
 
-    response = jsonify([public_icon_record(icon) for icon in icons])
+    response = jsonify(
+        {
+            "items": [public_icon_record(icon, service) for icon in icons],
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+        }
+    )
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Icon-Catalog"] = catalog_source
     return response
@@ -1037,11 +1091,12 @@ def check_admin_password():
 @require_admin
 def admin_icons():
     try:
-        icons = configured_catalog_for_admin().list_icons(active_only=True)
+        service = configured_catalog_for_admin()
+        icons = service.list_icons(active_only=True)
     except SupabaseCatalogError as error:
         app.logger.warning("Admin catalog request failed: %s", error)
         return jsonify({"error": str(error)}), 502
-    response = jsonify([public_icon_record(icon) for icon in icons])
+    response = jsonify([public_icon_record(icon, service) for icon in icons])
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -1091,7 +1146,7 @@ def upload_icon():
         app.logger.warning("Icon upload failed: %s", error)
         return jsonify({"error": str(error)}), 502
 
-    response = jsonify(public_icon_record(icon))
+    response = jsonify(public_icon_record(icon, service))
     response.status_code = 201
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -1116,14 +1171,15 @@ def edit_icon(icon_id: str):
         return jsonify({"error": "Provide a name or tags to update"}), 400
 
     try:
-        icon = configured_catalog_for_admin().update_icon(icon_id, updates)
+        service = configured_catalog_for_admin()
+        icon = service.update_icon(icon_id, updates)
     except SupabaseCatalogError as error:
         app.logger.warning("Icon metadata update failed: %s", error)
         return jsonify({"error": str(error)}), 502
     if icon is None:
         return jsonify({"error": "Unknown icon id"}), 404
 
-    response = jsonify(public_icon_record(icon))
+    response = jsonify(public_icon_record(icon, service))
     response.headers["Cache-Control"] = "no-store"
     return response
 

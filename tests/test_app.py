@@ -5,12 +5,17 @@ import os
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from urllib.parse import quote
 from unittest.mock import patch
 
 from PIL import Image
 
 import app as app_module
-from supabase_catalog import SupabaseCatalogError
+from supabase_catalog import (
+    SupabaseCatalog,
+    SupabaseCatalogError,
+    SupabaseSettings,
+)
 
 
 ADMIN_HEADERS = {"X-Admin-Password": "test-admin-password"}
@@ -59,15 +64,43 @@ class FakeSupabaseCatalog:
         ]
         self.storage: dict[str, bytes] = {}
         self.next_id = 1
+        self.search_calls: list[dict[str, object]] = []
+        self.list_calls = 0
+        self.download_calls: list[str] = []
+        self.search_error = False
 
     def require_configured(self) -> None:
         return None
 
     def list_icons(self, *, active_only: bool = True):
+        self.list_calls += 1
         records = self.records
         if active_only:
             records = [record for record in records if record["is_active"]]
         return deepcopy(sorted(records, key=lambda record: record["name"]))
+
+    def search_icons(self, query: str, *, limit: int = 48, offset: int = 0):
+        self.search_calls.append(
+            {"query": query, "limit": limit, "offset": offset}
+        )
+        if self.search_error:
+            raise SupabaseCatalogError("Search is temporarily unavailable")
+        records = [record for record in self.records if record["is_active"]]
+        records.sort(key=lambda record: record["name"].casefold())
+        if query:
+            records = [
+                record
+                for record in records
+                if app_module.icon_matches_query(record, query)
+            ]
+        return deepcopy(records[offset : offset + limit])
+
+    def public_object_url(self, storage_path: str) -> str:
+        object_path = quote(storage_path.lstrip("/"), safe="/")
+        return (
+            "https://project.example/storage/v1/object/public/"
+            f"icon-assets/{object_path}"
+        )
 
     def get_icon(self, icon_id: str, *, active_only: bool = True):
         for record in self.records:
@@ -101,6 +134,7 @@ class FakeSupabaseCatalog:
         self.storage[storage_path] = png_bytes
 
     def download_png(self, storage_path: str) -> bytes:
+        self.download_calls.append(storage_path)
         try:
             return self.storage[storage_path]
         except KeyError as error:
@@ -137,7 +171,11 @@ class LocalCompatibilityTests(unittest.TestCase):
         response = self.client.get("/api/search")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["X-Icon-Catalog"], "local")
-        self.assertEqual(len(response.get_json()), 11)
+        payload = response.get_json()
+        self.assertEqual(payload["offset"], 0)
+        self.assertEqual(payload["limit"], 48)
+        self.assertFalse(payload["has_more"])
+        self.assertEqual(len(payload["items"]), 11)
 
     def test_existing_processing_background_controls_and_resize_work(self) -> None:
         response = self.client.get(
@@ -147,6 +185,12 @@ class LocalCompatibilityTests(unittest.TestCase):
         self.assertEqual(response.content_type, "image/png")
         with Image.open(io.BytesIO(response.data)) as result:
             self.assertEqual(result.size, (40, 40))
+
+        download = self.client.get("/api/process/1?size=40&download=true")
+        self.assertEqual(download.status_code, 200)
+        self.assertIn(
+            "attachment", download.headers.get("Content-Disposition", "")
+        )
 
         source = Image.new("RGBA", (32, 32), (255, 255, 255, 255))
         for x in range(10, 22):
@@ -170,10 +214,58 @@ class LocalCompatibilityTests(unittest.TestCase):
             self.assertLess(result.getpixel((0, 0))[3], 20)
 
     def test_local_combination_search_uses_name_tags_and_colors(self) -> None:
-        purple = self.client.get("/api/search?q=purple+drop").get_json()
-        pink_fruit = self.client.get("/api/search?q=pink+fruit").get_json()
+        purple = self.client.get("/api/search?q=purple+drop").get_json()["items"]
+        pink_fruit = self.client.get("/api/search?q=pink+fruit").get_json()["items"]
         self.assertEqual([icon["name"] for icon in purple], ["Purple Drop"])
         self.assertEqual([icon["name"] for icon in pink_fruit], ["Guava"])
+
+    def test_local_pagination_limit_and_offset(self) -> None:
+        response = self.client.get("/api/search?limit=3&offset=2")
+        payload = response.get_json()
+        self.assertEqual(payload["limit"], 3)
+        self.assertEqual(payload["offset"], 2)
+        self.assertEqual(len(payload["items"]), 3)
+        self.assertTrue(payload["has_more"])
+
+
+class SupabaseCatalogClientTests(unittest.TestCase):
+    def test_search_icons_posts_parameters_to_catalog_rpc(self) -> None:
+        catalog = SupabaseCatalog(
+            SupabaseSettings(
+                url="https://project.example",
+                service_role_key="placeholder",
+                bucket="icon-assets",
+            )
+        )
+        with patch.object(catalog, "_request", return_value=b"[]") as request:
+            self.assertEqual(
+                catalog.search_icons("purple drop", limit=49, offset=96),
+                [],
+            )
+        request.assert_called_once_with(
+            "POST",
+            "/rest/v1/rpc/search_icons_catalog",
+            json_body={
+                "search_query": "purple drop",
+                "result_limit": 49,
+                "result_offset": 96,
+            },
+            retry_transient=True,
+        )
+
+    def test_public_object_url_encodes_bucket_and_object_path(self) -> None:
+        catalog = SupabaseCatalog(
+            SupabaseSettings(
+                url="https://project.example",
+                service_role_key="placeholder",
+                bucket="icon assets",
+            )
+        )
+        self.assertEqual(
+            catalog.public_object_url("uploads/pink icon #1.png"),
+            "https://project.example/storage/v1/object/public/"
+            "icon%20assets/uploads/pink%20icon%20%231.png",
+        )
 
 
 class DynamicCatalogTests(unittest.TestCase):
@@ -205,6 +297,139 @@ class DynamicCatalogTests(unittest.TestCase):
             content_type="multipart/form-data",
         )
 
+    def add_catalog_records(self, count: int) -> None:
+        for index in range(count):
+            self.fake.records.append(
+                {
+                    "id": f"catalog-{index:03d}",
+                    "name": f"Catalog Icon {index:03d}",
+                    "source": "local",
+                    "local_filename": "guava.png",
+                    "storage_path": None,
+                    "original_filename": f"catalog_icon_{index:03d}.png",
+                    "tags": ["catalog", f"item-{index:03d}"],
+                    "colors": ["green"],
+                    "width": 4500,
+                    "height": 4500,
+                    "is_active": True,
+                    "updated_at": "2026-08-18T00:00:00Z",
+                }
+            )
+
+    def test_default_gallery_pagination_uses_one_extra_rpc_row(self) -> None:
+        self.add_catalog_records(58)
+        response = self.client.get("/api/search")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["X-Icon-Catalog"], "supabase")
+        self.assertEqual(payload["limit"], 48)
+        self.assertEqual(payload["offset"], 0)
+        self.assertEqual(len(payload["items"]), 48)
+        self.assertTrue(payload["has_more"])
+        self.assertEqual(
+            self.fake.search_calls[-1],
+            {"query": "", "limit": 49, "offset": 0},
+        )
+
+    def test_limit_handling_requests_limit_plus_one(self) -> None:
+        response = self.client.get("/api/search?limit=1")
+        payload = response.get_json()
+        self.assertEqual(payload["limit"], 1)
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertTrue(payload["has_more"])
+        self.assertEqual(self.fake.search_calls[-1]["limit"], 2)
+
+        minimum = self.client.get("/api/search?limit=0").get_json()
+        self.assertEqual(minimum["limit"], 1)
+        self.assertEqual(self.fake.search_calls[-1]["limit"], 2)
+
+    def test_offset_handling_is_forwarded_to_rpc(self) -> None:
+        response = self.client.get("/api/search?limit=1&offset=1")
+        payload = response.get_json()
+        self.assertEqual(payload["offset"], 1)
+        self.assertEqual(payload["items"][0]["id"], "local-purple")
+        self.assertEqual(self.fake.search_calls[-1]["offset"], 1)
+
+    def test_limit_is_clamped_to_public_maximum(self) -> None:
+        response = self.client.get("/api/search?limit=10000&offset=-4")
+        payload = response.get_json()
+        self.assertEqual(payload["limit"], 100)
+        self.assertEqual(payload["offset"], 0)
+        self.assertEqual(self.fake.search_calls[-1]["limit"], 101)
+        self.assertEqual(self.fake.search_calls[-1]["offset"], 0)
+
+    def test_has_more_is_false_on_final_page(self) -> None:
+        payload = self.client.get("/api/search?limit=48").get_json()
+        self.assertEqual(len(payload["items"]), 2)
+        self.assertFalse(payload["has_more"])
+
+    def test_query_is_forwarded_and_multiword_search_is_and_style(self) -> None:
+        matches = self.client.get("/api/search?q=purple+drop").get_json()[
+            "items"
+        ]
+        self.assertEqual([icon["id"] for icon in matches], ["local-purple"])
+        self.assertEqual(self.fake.search_calls[-1]["query"], "purple drop")
+
+        no_match = self.client.get("/api/search?q=purple+fruit").get_json()[
+            "items"
+        ]
+        self.assertEqual(no_match, [])
+
+    def test_tag_parameter_remains_compatible(self) -> None:
+        matches = self.client.get("/api/search?tag=pink+fruit").get_json()[
+            "items"
+        ]
+        self.assertEqual([icon["id"] for icon in matches], ["local-guava"])
+        self.assertEqual(self.fake.search_calls[-1]["query"], "pink fruit")
+
+    def test_storage_thumbnail_uses_direct_public_url(self) -> None:
+        self.fake.records.append(
+            {
+                "id": "storage-pink",
+                "name": "Pink Storage Icon",
+                "source": "storage",
+                "local_filename": None,
+                "storage_path": "uploads/pink icon.png",
+                "original_filename": "pink icon.png",
+                "tags": ["pink"],
+                "colors": ["pink"],
+                "width": 48,
+                "height": 48,
+                "is_active": True,
+                "updated_at": "2026-08-18T00:00:00Z",
+            }
+        )
+        matches = self.client.get("/api/search?q=storage").get_json()["items"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(
+            matches[0]["thumbnail_url"],
+            "https://project.example/storage/v1/object/public/"
+            "icon-assets/uploads/pink%20icon.png",
+        )
+        self.assertNotIn("api/icons", matches[0]["thumbnail_url"])
+
+    def test_local_thumbnail_retains_local_flask_url(self) -> None:
+        matches = self.client.get("/api/search?q=guava").get_json()["items"]
+        self.assertEqual(matches[0]["thumbnail_url"], "/icons/guava.png")
+
+    def test_supabase_search_failure_gracefully_uses_local_catalog(self) -> None:
+        self.fake.search_error = True
+        response = self.client.get("/api/search?q=purple+drop&limit=2")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["X-Icon-Catalog"], "local-fallback")
+        self.assertEqual([icon["name"] for icon in payload["items"]], ["Purple Drop"])
+        self.assertFalse(payload["has_more"])
+
+    def test_admin_listing_still_uses_complete_catalog(self) -> None:
+        response = self.client.get("/api/admin/icons", headers=ADMIN_HEADERS)
+        icons = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(icons, list)
+        self.assertEqual(len(icons), 2)
+        self.assertEqual(self.fake.list_calls, 1)
+        self.assertEqual(self.fake.search_calls, [])
+
     def test_admin_routes_require_password(self) -> None:
         self.assertEqual(self.client.get("/api/admin/icons").status_code, 401)
         self.assertEqual(
@@ -225,13 +450,17 @@ class DynamicCatalogTests(unittest.TestCase):
         self.assertIn("purple", icon["colors"])
         self.assertTrue(self.fake.storage)
 
-        matches = self.client.get("/api/search?q=purple+drop").get_json()
+        matches = self.client.get("/api/search?q=purple+drop").get_json()[
+            "items"
+        ]
         self.assertIn(icon["id"], [match["id"] for match in matches])
 
         processed = self.client.get(
             f"/api/process/{icon['id']}?width=36&height=36"
         )
         self.assertEqual(processed.status_code, 200)
+        storage_path = next(iter(self.fake.storage))
+        self.assertIn(storage_path, self.fake.download_calls)
         with Image.open(io.BytesIO(processed.data)) as image:
             self.assertEqual(image.size, (36, 36))
 
@@ -244,9 +473,13 @@ class DynamicCatalogTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
-        matches = self.client.get("/api/search?q=purple+fruit").get_json()
+        matches = self.client.get("/api/search?q=purple+fruit").get_json()[
+            "items"
+        ]
         self.assertEqual([match["id"] for match in matches], [icon["id"]])
-        old_matches = self.client.get("/api/search?q=purple+weather").get_json()
+        old_matches = self.client.get("/api/search?q=purple+weather").get_json()[
+            "items"
+        ]
         self.assertNotIn(icon["id"], [match["id"] for match in old_matches])
 
     def test_remove_uploaded_icon_deactivates_record_and_deletes_object(self) -> None:

@@ -124,12 +124,42 @@
             align-items: flex-start;
         }
 
-        .gallery-grid {
+        .gallery-column {
             flex: 1.4;
             min-width: 0;
+        }
+
+        .gallery-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
             gap: 20px;
+        }
+
+        .gallery-pagination {
+            display: flex;
+            justify-content: center;
+            margin-top: 22px;
+        }
+
+        .load-more-button {
+            min-width: 150px;
+            padding: 11px 18px;
+            border: 1px solid rgba(0, 112, 74, 0.3);
+            border-radius: 10px;
+            background: var(--surface);
+            color: var(--accent);
+            cursor: pointer;
+            font-weight: 750;
+        }
+
+        .load-more-button:hover:not(:disabled) {
+            background: #f0fdf4;
+            border-color: var(--accent);
+        }
+
+        .load-more-button:disabled {
+            cursor: wait;
+            opacity: 0.55;
         }
 
         .icon-card {
@@ -745,7 +775,14 @@
         </div>
 
         <div class="layout-body">
-            <div id="iconGrid" class="gallery-grid" aria-live="polite"></div>
+            <div class="gallery-column">
+                <div id="iconGrid" class="gallery-grid" aria-live="polite"></div>
+                <div class="gallery-pagination">
+                    <button id="loadMoreBtn" class="load-more-button" type="button" hidden>
+                        Load more
+                    </button>
+                </div>
+            </div>
 
             <section class="preview-panel" aria-labelledby="previewHeading">
                 <div class="preview-title-row">
@@ -836,10 +873,14 @@
             let previewInFlight = false;
             let previewQueued = false;
             let gallerySequence = 0;
+            let galleryOffset = 0;
+            let galleryQuery = "";
             let searchTimer = null;
             let adminPassword = "";
+            const galleryPageSize = 48;
 
             const iconGrid = document.getElementById("iconGrid");
+            const loadMoreBtn = document.getElementById("loadMoreBtn");
             const searchBox = document.getElementById("searchBox");
             const sizeSlider = document.getElementById("sizeSlider");
             const sizeValue = document.getElementById("sizeValue");
@@ -1129,8 +1170,10 @@
                 renderLivePreview();
             }
 
-            function renderGallery() {
-                iconGrid.replaceChildren();
+            function renderGallery(icons, append = false) {
+                if (!append) {
+                    iconGrid.replaceChildren();
+                }
 
                 if (iconsDataCache.length === 0) {
                     const emptyMessage = document.createElement("div");
@@ -1140,7 +1183,7 @@
                     return;
                 }
 
-                iconsDataCache.forEach((icon) => {
+                icons.forEach((icon) => {
                     const card = document.createElement("button");
                     card.type = "button";
                     card.className = "icon-card";
@@ -1158,6 +1201,7 @@
                     const thumbnail = document.createElement("img");
                     thumbnail.alt = "";
                     thumbnail.loading = "lazy";
+                    thumbnail.decoding = "async";
                     thumbnail.src = icon.thumbnail_url;
                     thumbnail.addEventListener("error", () => {
                         thumbnail.style.visibility = "hidden";
@@ -1182,16 +1226,29 @@
                 });
             }
 
-            async function fetchGallery(query = searchBox.value) {
+            async function fetchGallery(
+                query = searchBox.value,
+                { append = false } = {}
+            ) {
                 const sequence = ++gallerySequence;
-                iconGrid.innerHTML = '<div class="no-results">Loading icon catalog...</div>';
-                const parameters = new URLSearchParams();
-                if (query.trim()) {
-                    parameters.set("q", query.trim());
+                const normalizedQuery = query.trim();
+                const requestedOffset = append ? galleryOffset : 0;
+                if (!append) {
+                    galleryQuery = normalizedQuery;
+                    galleryOffset = 0;
+                    loadMoreBtn.hidden = true;
+                    iconGrid.innerHTML = '<div class="no-results">Loading icon catalog...</div>';
+                } else {
+                    loadMoreBtn.disabled = true;
+                    loadMoreBtn.textContent = "Loading...";
                 }
-                const endpoint = parameters.size
-                    ? `/api/search?${parameters.toString()}`
-                    : "/api/search";
+                const parameters = new URLSearchParams();
+                if (normalizedQuery) {
+                    parameters.set("q", normalizedQuery);
+                }
+                parameters.set("limit", String(galleryPageSize));
+                parameters.set("offset", String(requestedOffset));
+                const endpoint = `/api/search?${parameters.toString()}`;
 
                 try {
                     const response = await fetchWithRetry(
@@ -1208,15 +1265,24 @@
                     }
 
                     const payload = await response.json();
-                    if (!Array.isArray(payload)) {
+                    if (
+                        !payload ||
+                        !Array.isArray(payload.items) ||
+                        typeof payload.has_more !== "boolean"
+                    ) {
                         throw new Error("The server returned an invalid catalog response");
                     }
                     if (sequence !== gallerySequence) {
                         return;
                     }
 
-                    iconsDataCache = payload;
+                    const pageItems = payload.items;
+                    iconsDataCache = append
+                        ? iconsDataCache.concat(pageItems)
+                        : pageItems;
+                    galleryOffset = requestedOffset + pageItems.length;
                     if (
+                        !append &&
                         selectedIcon &&
                         !iconsDataCache.some((icon) => icon.id === selectedIcon.id)
                     ) {
@@ -1226,18 +1292,28 @@
                         placeholderText.textContent = "Select an illustration asset to preview it.";
                         downloadBtn.disabled = true;
                     }
-                    renderGallery();
+                    renderGallery(pageItems, append);
+                    loadMoreBtn.hidden = !payload.has_more;
+                    loadMoreBtn.disabled = false;
+                    loadMoreBtn.textContent = "Load more";
                 } catch (error) {
                     if (sequence !== gallerySequence) {
                         return;
                     }
                     console.error(error);
-                    iconGrid.innerHTML = "";
-                    const errorMessage = document.createElement("div");
-                    errorMessage.className = "gallery-error";
-                    errorMessage.textContent =
-                        "Could not load the icon catalog. The hosted service may be waking up; wait a moment and refresh.";
-                    iconGrid.appendChild(errorMessage);
+                    if (append) {
+                        loadMoreBtn.hidden = false;
+                        loadMoreBtn.disabled = false;
+                        loadMoreBtn.textContent = "Try loading more again";
+                    } else {
+                        loadMoreBtn.hidden = true;
+                        iconGrid.innerHTML = "";
+                        const errorMessage = document.createElement("div");
+                        errorMessage.className = "gallery-error";
+                        errorMessage.textContent =
+                            "Could not load the icon catalog. The hosted service may be waking up; wait a moment and refresh.";
+                        iconGrid.appendChild(errorMessage);
+                    }
                 }
             }
 
@@ -1314,6 +1390,7 @@
                     image.src = icon.thumbnail_url;
                     image.alt = "";
                     image.loading = "lazy";
+                    image.decoding = "async";
 
                     const meta = document.createElement("div");
                     meta.className = "manage-meta";
@@ -1517,10 +1594,16 @@
 
             searchBox.addEventListener("input", () => {
                 window.clearTimeout(searchTimer);
+                gallerySequence += 1;
+                loadMoreBtn.hidden = true;
                 searchTimer = window.setTimeout(
                     () => fetchGallery(searchBox.value),
                     180
                 );
+            });
+
+            loadMoreBtn.addEventListener("click", () => {
+                fetchGallery(galleryQuery, { append: true });
             });
 
             sizeSlider.addEventListener("input", schedulePreview);

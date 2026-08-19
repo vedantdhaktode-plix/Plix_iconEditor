@@ -185,6 +185,37 @@ class SupabaseCatalog:
         )
         return self._decode_rows(payload)
 
+    def search_icons(
+        self, query: str, limit: int = 48, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Search the active public catalog through the database RPC."""
+        requested_limit = max(1, int(limit))
+        requested_offset = max(0, int(offset))
+        payload = self._request(
+            "POST",
+            "/rest/v1/rpc/search_icons_catalog",
+            json_body={
+                "search_query": str(query or "").strip(),
+                "result_limit": requested_limit,
+                "result_offset": requested_offset,
+            },
+            retry_transient=True,
+        )
+        return self._decode_rows(payload)
+
+    def public_object_url(self, storage_path: str) -> str:
+        """Return a credential-free public URL for a known Storage object."""
+        self.require_configured()
+        normalized_path = str(storage_path or "").lstrip("/")
+        if not normalized_path:
+            raise SupabaseCatalogError("Icon storage path is missing")
+        bucket = quote(self.settings.bucket, safe="")
+        object_path = quote(normalized_path, safe="/")
+        return (
+            f"{self.settings.url}/storage/v1/object/public/"
+            f"{bucket}/{object_path}"
+        )
+
     def get_icon(
         self, icon_id: str, *, active_only: bool = True
     ) -> dict[str, Any] | None:
