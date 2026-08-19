@@ -751,7 +751,7 @@
         </label>
 
         <div id="colorField" class="control-group">
-            <label for="bgColorPicker">Change Background Color</label>
+            <label for="bgColorPicker">Change Background Color (optional)</label>
             <input type="color" id="bgColorPicker" value="#a855f7">
         </div>
 
@@ -866,6 +866,7 @@
             "use strict";
 
             let selectedIcon = null;
+            let backgroundColorEnabled = false;
             let iconSize = 150;
             let iconsDataCache = [];
             let previewSequence = 0;
@@ -908,7 +909,9 @@
             function currentSettings() {
                 return {
                     removeBackground: removeBgCheck.checked,
-                    backgroundColor: bgColorPicker.value,
+                    backgroundColor: backgroundColorEnabled
+                        ? bgColorPicker.value
+                        : null,
                 };
             }
 
@@ -1159,6 +1162,9 @@
             }
 
             function selectIcon(icon, card) {
+                backgroundColorEnabled = false;
+                removeBgCheck.checked = false;
+                updateControlState();
                 selectedIcon = icon;
                 document.querySelectorAll(".icon-card").forEach((item) => {
                     item.classList.remove("active");
@@ -1607,7 +1613,10 @@
             });
 
             sizeSlider.addEventListener("input", schedulePreview);
-            bgColorPicker.addEventListener("input", schedulePreview);
+            bgColorPicker.addEventListener("input", () => {
+                backgroundColorEnabled = true;
+                schedulePreview();
+            });
 
             removeBgCheck.addEventListener("change", () => {
                 updateControlState();

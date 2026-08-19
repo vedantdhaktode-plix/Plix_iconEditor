@@ -213,6 +213,19 @@ class LocalCompatibilityTests(unittest.TestCase):
         with Image.open(transparent) as result:
             self.assertLess(result.getpixel((0, 0))[3], 20)
 
+    def test_resize_and_download_without_background_color_preserve_source(self) -> None:
+        preview = self.client.get("/api/process/1?size=40")
+        download = self.client.get("/api/process/1?size=40&download=true")
+        violet = self.client.get(
+            "/api/process/1?size=40&bg_color=%23a855f7"
+        )
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(violet.status_code, 200)
+        self.assertEqual(preview.data, download.data)
+        self.assertNotEqual(preview.data, violet.data)
+
     def test_local_combination_search_uses_name_tags_and_colors(self) -> None:
         purple = self.client.get("/api/search?q=purple+drop").get_json()["items"]
         pink_fruit = self.client.get("/api/search?q=pink+fruit").get_json()["items"]
@@ -550,6 +563,47 @@ class DynamicCatalogTests(unittest.TestCase):
         self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY", template)
         self.assertNotIn("ADMIN_PASSWORD", template)
         self.assertNotIn("test-admin-password", template)
+
+    def test_frontend_background_color_is_opt_in_and_resets_per_icon(self) -> None:
+        template = (app_module.TEMPLATE_DIR / "index.html").read_text(
+            encoding="utf-8"
+        )
+        compact = " ".join(template.split())
+
+        self.assertIn("let backgroundColorEnabled = false;", compact)
+        self.assertIn(
+            "backgroundColor: backgroundColorEnabled ? bgColorPicker.value : null",
+            compact,
+        )
+        self.assertIn(
+            'bgColorPicker.addEventListener("input", () => { '
+            "backgroundColorEnabled = true; schedulePreview();",
+            compact,
+        )
+
+        select_start = compact.index("function selectIcon(icon, card)")
+        select_end = compact.index("function renderGallery", select_start)
+        select_function = compact[select_start:select_end]
+        self.assertIn("backgroundColorEnabled = false;", select_function)
+        self.assertIn("removeBgCheck.checked = false;", select_function)
+        self.assertIn("updateControlState();", select_function)
+        self.assertLess(
+            select_function.index("backgroundColorEnabled = false;"),
+            select_function.index("renderLivePreview();"),
+        )
+
+        self.assertIn(
+            "if (!settings.removeBackground && settings.backgroundColor)",
+            compact,
+        )
+        self.assertIn(
+            '"remove_bg", settings.removeBackground ? "true" : "false"',
+            compact,
+        )
+        self.assertIn(
+            "anchor.href = processUrl(selectedIcon, iconSize, { download: true });",
+            compact,
+        )
 
 
 if __name__ == "__main__":
